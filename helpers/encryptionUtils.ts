@@ -1,9 +1,5 @@
 import crypto from 'crypto';
 
-// ------------------------------
-// Helper Functions
-// ------------------------------
-
 // Function to perform PBKDF2 key derivation
 export function deriveKey(
   password: string,
@@ -57,61 +53,54 @@ export function permuteColumns(
   return matrix.map((row) => permutation.map((colIndex) => row[colIndex]));
 }
 
-// Function to inverse permute columns
-export function inversePermuteColumns(
-  matrix: number[][],
-  permutation: number[]
-): number[][] {
-  const inversePermutation = permutation.slice();
-  for (let i = 0; i < permutation.length; i++) {
-    inversePermutation[permutation[i]] = i;
+// GF(2^8) multiplication function
+function gfMul(a: number, b: number): number {
+  let p = 0;
+  for (let counter = 0; counter < 8; counter++) {
+    if (b & 1) {
+      p ^= a;
+    }
+    const hiBitSet = a & 0x80;
+    a = (a << 1) & 0xff;
+    if (hiBitSet) {
+      a ^= 0x1b; // AES irreducible polynomial
+    }
+    b >>= 1;
   }
-  return matrix.map((row) =>
-    inversePermutation.map((colIndex) => row[colIndex])
-  );
+  return p;
 }
 
-// Function to perform mixing layer (matrix multiplication modulo 256)
-export function mixMatrix(
-  matrix: number[][],
-  mixingMatrix: number[][]
-): number[][] {
+// Function to perform mixing layer (AES MixColumns)
+export function mixMatrix(matrix: number[][]): number[][] {
   const N = matrix.length;
   const result: number[][] = Array.from({ length: N }, () => Array(N).fill(0));
 
-  for (let i = 0; i < N; i++) {
-    // Rows of mixingMatrix
-    for (let j = 0; j < N; j++) {
-      // Columns of matrix
-      let sum = 0;
-      for (let k = 0; k < N; k++) {
-        sum += mixingMatrix[i][k] * matrix[k][j];
-      }
-      result[i][j] = sum % 256;
-    }
+  for (let c = 0; c < N; c++) {
+    const a = matrix.map((row) => row[c]);
+    result[0][c] = gfMul(a[0], 2) ^ gfMul(a[1], 3) ^ a[2] ^ a[3];
+    result[1][c] = a[0] ^ gfMul(a[1], 2) ^ gfMul(a[2], 3) ^ a[3];
+    result[2][c] = a[0] ^ a[1] ^ gfMul(a[2], 2) ^ gfMul(a[3], 3);
+    result[3][c] = gfMul(a[0], 3) ^ a[1] ^ a[2] ^ gfMul(a[3], 2);
   }
 
   return result;
 }
 
-// Function to perform inverse mixing layer
-export function inverseMixMatrix(
-  matrix: number[][],
-  inverseMixingMatrix: number[][]
-): number[][] {
+// Function to perform inverse mixing layer (AES InvMixColumns)
+export function inverseMixMatrix(matrix: number[][]): number[][] {
   const N = matrix.length;
   const result: number[][] = Array.from({ length: N }, () => Array(N).fill(0));
 
-  for (let i = 0; i < N; i++) {
-    // Rows of inverseMixingMatrix
-    for (let j = 0; j < N; j++) {
-      // Columns of matrix
-      let sum = 0;
-      for (let k = 0; k < N; k++) {
-        sum += inverseMixingMatrix[i][k] * matrix[k][j];
-      }
-      result[i][j] = sum % 256;
-    }
+  for (let c = 0; c < N; c++) {
+    const a = matrix.map((row) => row[c]);
+    result[0][c] =
+      gfMul(a[0], 14) ^ gfMul(a[1], 11) ^ gfMul(a[2], 13) ^ gfMul(a[3], 9);
+    result[1][c] =
+      gfMul(a[0], 9) ^ gfMul(a[1], 14) ^ gfMul(a[2], 11) ^ gfMul(a[3], 13);
+    result[2][c] =
+      gfMul(a[0], 13) ^ gfMul(a[1], 9) ^ gfMul(a[2], 14) ^ gfMul(a[3], 11);
+    result[3][c] =
+      gfMul(a[0], 11) ^ gfMul(a[1], 13) ^ gfMul(a[2], 9) ^ gfMul(a[3], 14);
   }
 
   return result;
@@ -123,7 +112,6 @@ export function permuteBits(
   key: Buffer,
   round: number
 ): number[] {
-  // Example: Rotate bits left by (key[round % key.length] % 8)
   const shift = key[round % key.length] % 8;
   return data.map((byte) => ((byte << shift) | (byte >> (8 - shift))) & 0xff);
 }
@@ -134,7 +122,6 @@ export function inversePermuteBits(
   key: Buffer,
   round: number
 ): number[] {
-  // Reverse the permutation: rotate bits right by (key[round % key.length] % 8)
   const shift = key[round % key.length] % 8;
   return data.map((byte) => ((byte >> shift) | (byte << (8 - shift))) & 0xff);
 }
@@ -145,7 +132,6 @@ export function generateColumnPermutation(
   round: number,
   N: number
 ): number[] {
-  // Use a pseudo-random approach based on key and round
   const hash = crypto
     .createHash('sha256')
     .update(key)
@@ -163,7 +149,7 @@ export function generateColumnPermutation(
 export function generateInverseColumnPermutation(
   permutation: number[]
 ): number[] {
-  const inverse = Array(permutation.length).fill(0);
+  const inverse = Array(permutation.length);
   permutation.forEach((p, i) => {
     inverse[p] = i;
   });
@@ -178,21 +164,22 @@ export function pad(data: Buffer, blockSize: number): Buffer {
 }
 
 // Function to unpad plaintext (PKCS#7)
-export function unpad(data: Buffer): Buffer {
-  const padding = data[data.length - 1];
+export function unpad(data: Buffer, blockSize: number): Buffer {
+  if (data.length === 0) {
+    throw new Error('Empty data buffer');
+  }
 
-  // Ensure padding value is within valid range
-  if (padding === 0 || padding > data.length) {
+  const lastByte = data[data.length - 1];
+
+  if (lastByte === 0 || lastByte > data.length || lastByte > blockSize) {
     throw new Error('Invalid padding value');
   }
 
-  // Check if all padding bytes have the correct value
-  const paddingStart = data.length - padding;
-  for (let i = data.length - 1; i >= paddingStart; i--) {
-    if (data[i] !== padding) {
-      throw new Error('Inconsistent padding bytes');
+  for (let i = data.length - lastByte; i < data.length; i++) {
+    if (data[i] !== lastByte) {
+      throw new Error('Invalid padding pattern');
     }
   }
 
-  return data.slice(0, data.length - padding);
+  return data.slice(0, data.length - lastByte);
 }

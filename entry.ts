@@ -7,12 +7,11 @@ import { MTCv3 } from './MTCV3';
 // ------------------------------
 
 function example() {
-  const password = 'SECRETKEY';
-  const salt = 'UNIQUE_SALT';
+  const password = 'strongpassword';
+  const salt = 'somesalt';
+  const mtc = new MTCv3(password, salt);
+
   const plaintext = 'HELLO WORLD';
-
-  const mtc = new MTCv3(password, salt, 10, 4); // 10 rounds, 4x4 matrix
-
   console.log('Plaintext:', plaintext);
 
   const ciphertext = mtc.encrypt(plaintext);
@@ -20,6 +19,14 @@ function example() {
 
   const decrypted = mtc.decrypt(ciphertext);
   console.log('Decrypted Text:', decrypted);
+
+  if (plaintext === decrypted) {
+    console.log('Success: Decrypted text matches the original plaintext.');
+  } else {
+    console.error(
+      'Failure: Decrypted text does not match the original plaintext.'
+    );
+  }
 }
 
 // Run the example

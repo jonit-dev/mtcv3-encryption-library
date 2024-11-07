@@ -1,17 +1,22 @@
 {
-  "name": "mtcv3",
-  "version": "1.0.0",
-  "main": "index.js",
+  "name": "mtcv3-encryption",
+  "version": "1.0.1",
+  "main": "dist/entry.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "ts-node entry.ts"
+    "test": "jest",
+    "start": "ts-node entry.ts",
+    "matrix": "ts-node mixingMatrix.ts",
+    "build": "tsc"
   },
   "keywords": [],
-  "author": "",
+  "author": "Joao Paulo Furtado Silva",
   "license": "ISC",
-  "description": "",
+  "description": "A brief description of the mtcv3 package.",
   "devDependencies": {
+    "@types/jest": "^29.5.14",
     "@types/node": "^22.9.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
     "ts-node": "^10.9.2",
     "typescript": "^5.6.3"
   },

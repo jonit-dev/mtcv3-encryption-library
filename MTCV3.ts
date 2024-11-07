@@ -1,10 +1,5 @@
 import crypto from 'crypto';
-import {
-  AES_INV_S_BOX,
-  AES_S_BOX,
-  INVERSE_MIXING_MATRIX,
-  MIXING_MATRIX,
-} from './constants/encryptionConstants';
+import { AES_INV_S_BOX, AES_S_BOX } from './constants/encryptionConstants';
 import {
   deriveKey,
   generateColumnPermutation,
@@ -26,8 +21,6 @@ export class MTCv3 {
   private keySchedule: Buffer[];
   private rounds: number;
   private matrixSize: number;
-  private mixingMatrix: number[][];
-  private inverseMixingMatrix: number[][];
   private iv: Buffer;
 
   constructor(
@@ -53,35 +46,28 @@ export class MTCv3 {
       this.keySchedule.push(keyMaterial.slice(start, end));
     }
 
-    // Define mixing matrix and its inverse
-    this.mixingMatrix = MIXING_MATRIX;
-    this.inverseMixingMatrix = INVERSE_MIXING_MATRIX;
-
     // Initialize IV (for CBC mode)
     this.iv = crypto.randomBytes(this.matrixSize * this.matrixSize);
   }
 
   // Encryption Function
   encrypt(plaintext: string): string {
-    // Convert plaintext to Buffer
     let data = Buffer.from(plaintext, 'utf-8');
-    console.log('Original data length:', data.length);
 
     // Pad data
     const blockSize = this.matrixSize * this.matrixSize;
     data = pad(data, blockSize);
-    console.log('Padded data length:', data.length);
 
     // Divide into blocks
     const blocks: Buffer[] = [];
     for (let i = 0; i < data.length; i += blockSize) {
       blocks.push(data.slice(i, i + blockSize));
     }
-    console.log('Number of blocks:', blocks.length);
 
     // Encrypt each block using CBC mode
     const ciphertextBlocks: Buffer[] = [];
     let previousCipher: Buffer = this.iv;
+
     for (const block of blocks) {
       // XOR with previous cipher (CBC)
       const xored = Buffer.alloc(block.length);
@@ -90,73 +76,62 @@ export class MTCv3 {
       }
 
       // Encrypt block
-      let encrypted = this.encryptBlock(xored);
+      const encrypted = this.encryptBlock(xored);
 
       // Update previous cipher
       previousCipher = encrypted;
-
       ciphertextBlocks.push(encrypted);
     }
 
-    // Concatenate all ciphertext blocks
-    const ciphertext = Buffer.concat(ciphertextBlocks);
-    console.log('Final ciphertext length:', ciphertext.length);
-
-    // Prepend IV for decryption
-    const finalBuffer = Buffer.concat([this.iv, ciphertext]);
-    console.log('Final buffer length (with IV):', finalBuffer.length);
+    // Concatenate all ciphertext blocks with IV
+    const finalBuffer = Buffer.concat([this.iv, ...ciphertextBlocks]);
     return finalBuffer.toString('hex');
   }
 
   // Decryption Function
   decrypt(ciphertextHex: string): string {
     const ciphertextWithIV = Buffer.from(ciphertextHex, 'hex');
-    console.log(
-      'Received ciphertext length (with IV):',
-      ciphertextWithIV.length
-    );
-
-    // Extract IV
     const blockSize = this.matrixSize * this.matrixSize;
+
+    if (ciphertextWithIV.length < blockSize) {
+      throw new Error('Invalid ciphertext length');
+    }
+
     const iv = ciphertextWithIV.slice(0, blockSize);
     const ciphertext = ciphertextWithIV.slice(blockSize);
-    console.log('Ciphertext length (without IV):', ciphertext.length);
 
-    // Divide into blocks
+    if (ciphertext.length % blockSize !== 0) {
+      throw new Error('Invalid ciphertext length');
+    }
+
     const blocks: Buffer[] = [];
     for (let i = 0; i < ciphertext.length; i += blockSize) {
       blocks.push(ciphertext.slice(i, i + blockSize));
     }
-    console.log('Number of blocks to decrypt:', blocks.length);
 
-    // Decrypt each block using CBC mode
     const plaintextBlocks: Buffer[] = [];
     let previousCipher: Buffer = iv;
-    for (const block of blocks) {
-      // Decrypt block
-      let decrypted = this.decryptBlock(block);
 
-      // XOR with previous cipher (CBC)
+    for (const block of blocks) {
+      const decrypted = this.decryptBlock(block);
+
       const xored = Buffer.alloc(decrypted.length);
       for (let i = 0; i < decrypted.length; i++) {
         xored[i] = decrypted[i] ^ previousCipher[i];
       }
 
-      // Update previous cipher
-      previousCipher = block;
-
       plaintextBlocks.push(xored);
+      previousCipher = block;
     }
 
-    // Concatenate all plaintext blocks
-    let plaintext = Buffer.concat(plaintextBlocks);
-    console.log('Decrypted data length (before unpad):', plaintext.length);
+    const plaintext = Buffer.concat(plaintextBlocks);
 
-    // Unpad data
-    plaintext = unpad(plaintext);
-    console.log('Final decrypted length:', plaintext.length);
-
-    return plaintext.toString('utf-8');
+    try {
+      const unpadded = unpad(plaintext, blockSize);
+      return unpadded.toString('utf-8');
+    } catch (error) {
+      throw new Error('Decryption failed: Invalid padding');
+    }
   }
 
   // Encrypt a single block
@@ -165,9 +140,8 @@ export class MTCv3 {
 
     for (let r = 0; r < this.rounds; r++) {
       const key = this.keySchedule[r];
-      const shiftAmounts = Array.from(key); // Using key bytes as shift amounts
+      const shiftAmounts = Array.from(key);
 
-      // Fill matrix in row-major order
       const matrix = this.fillMatrix(data, 'row');
 
       // Row Shifting
@@ -182,20 +156,15 @@ export class MTCv3 {
       flatData = substituteBytes(flatData, AES_S_BOX);
 
       // Mixing Layer
-      const mixedMatrix = mixMatrix(
-        this.reshape(flatData, this.matrixSize),
-        this.mixingMatrix
-      );
+      const mixedMatrix = mixMatrix(this.reshape(flatData, this.matrixSize));
 
       // Bit-level Permutation
       flatData = mixedMatrix.flat();
       flatData = permuteBits(flatData, key, r);
 
-      // Prepare data for next round
       data = flatData;
     }
 
-    // Return encrypted block
     return Buffer.from(data);
   }
 
@@ -205,16 +174,15 @@ export class MTCv3 {
 
     for (let r = this.rounds - 1; r >= 0; r--) {
       const key = this.keySchedule[r];
-      const shiftAmounts = Array.from(key); // Using key bytes as shift amounts
+      const shiftAmounts = Array.from(key);
 
-      // Bit-level Permutation Inversion
+      // Inverse Bit-level Permutation
       data = inversePermuteBits(data, key, r);
 
-      // **Corrected: Use 'row' instead of 'column'**
       let matrix = this.fillMatrix(data, 'row');
 
       // Inverse Mixing Layer
-      matrix = inverseMixMatrix(matrix, this.inverseMixingMatrix);
+      matrix = inverseMixMatrix(matrix);
 
       // Inverse S-Box Substitution
       let flatData = matrix.flat();
@@ -224,22 +192,16 @@ export class MTCv3 {
       matrix = this.reshape(flatData, this.matrixSize);
 
       // Inverse Column Permutation
-      const permutation = generateColumnPermutation(
-        this.keySchedule[r],
-        r,
-        this.matrixSize
-      );
+      const permutation = generateColumnPermutation(key, r, this.matrixSize);
       const inversePermutation = generateInverseColumnPermutation(permutation);
       matrix = permuteColumns(matrix, inversePermutation);
 
       // Inverse Row Shifting
       matrix = inverseShiftRows(matrix, shiftAmounts);
 
-      // Flatten matrix to data
       data = matrix.flat();
     }
 
-    // Return decrypted block
     return Buffer.from(data);
   }
 
